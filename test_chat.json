@@ -1,0 +1,7 @@
+{
+  "message": "What are your hours?",
+  "session_id": "test_session_123",
+  "context": {
+    "demo_slug": "test-golf-club"
+  }
+}
