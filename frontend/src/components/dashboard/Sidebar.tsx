@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { colors, spacing, typography } from '../../lib/design-system';
 
 interface NavItem {
@@ -22,6 +23,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeRoute = '/dashboard', on
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
   const navItems: NavItem[] = [
+    { icon: '🏠', label: 'Home', path: '/' },
     { icon: '📊', label: 'Dashboard', path: '/dashboard' },
     { icon: '📞', label: 'Recent Calls', path: '/calls' },
     { icon: '📅', label: 'Bookings', path: '/bookings' },
@@ -144,44 +146,44 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeRoute = '/dashboard', on
 
       <div style={styles.navSection}>
         <div style={styles.navSectionTitle}>OVERVIEW</div>
-        {navItems.slice(0, 4).map((item) => {
+        {navItems.slice(0, 5).map((item) => {
           const isActive = activeRoute === item.path;
           const isHovered = hoveredItem === item.path;
 
           return (
-            <div
-              key={item.path}
-              style={styles.navItem(isActive, isHovered)}
-              onClick={() => onNavigate?.(item.path)}
-              onMouseEnter={() => setHoveredItem(item.path)}
-              onMouseLeave={() => setHoveredItem(null)}
-            >
-              {isActive && <div style={styles.activeIndicator} />}
-              <span style={styles.navItemIcon(isActive, isHovered)}>{item.icon}</span>
-              <span>{item.label}</span>
-            </div>
+            <Link key={item.path} to={item.path} style={{ textDecoration: 'none' }}>
+              <div
+                style={styles.navItem(isActive, isHovered)}
+                onMouseEnter={() => setHoveredItem(item.path)}
+                onMouseLeave={() => setHoveredItem(null)}
+              >
+                {isActive && <div style={styles.activeIndicator} />}
+                <span style={styles.navItemIcon(isActive, isHovered)}>{item.icon}</span>
+                <span>{item.label}</span>
+              </div>
+            </Link>
           );
         })}
       </div>
 
       <div style={styles.navSection}>
         <div style={styles.navSectionTitle}>MANAGE</div>
-        {navItems.slice(4).map((item) => {
+        {navItems.slice(5).map((item) => {
           const isActive = activeRoute === item.path;
           const isHovered = hoveredItem === item.path;
 
           return (
-            <div
-              key={item.path}
-              style={styles.navItem(isActive, isHovered)}
-              onClick={() => onNavigate?.(item.path)}
-              onMouseEnter={() => setHoveredItem(item.path)}
-              onMouseLeave={() => setHoveredItem(null)}
-            >
-              {isActive && <div style={styles.activeIndicator} />}
-              <span style={styles.navItemIcon(isActive, isHovered)}>{item.icon}</span>
-              <span>{item.label}</span>
-            </div>
+            <Link key={item.path} to={item.path} style={{ textDecoration: 'none' }}>
+              <div
+                style={styles.navItem(isActive, isHovered)}
+                onMouseEnter={() => setHoveredItem(item.path)}
+                onMouseLeave={() => setHoveredItem(null)}
+              >
+                {isActive && <div style={styles.activeIndicator} />}
+                <span style={styles.navItemIcon(isActive, isHovered)}>{item.icon}</span>
+                <span>{item.label}</span>
+              </div>
+            </Link>
           );
         })}
       </div>

@@ -19,3 +19,7 @@ playwright
 arq
 redis
 numpy
+deepgram-sdk
+elevenlabs
+pydub
+httpx

@@ -1,12 +1,11 @@
 /**
- * Chat Widget Component
- * Conversational UI for demo interactions
+ * Chat Widget Component - White Theme
+ * Linear-inspired minimal design
  */
 
 import React, { useState, useRef, useEffect } from 'react';
 import { chatAPI, type ChatRequest } from '../lib/api';
-import { colors, borderRadius, shadows, spacing } from '../lib/design-system';
-import { Button, Input } from './ui';
+import { whiteTheme } from '../lib/white-theme';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -107,160 +106,137 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({
     container: {
       display: 'flex',
       flexDirection: 'column' as const,
-      height: '600px',
-      background: colors.bg.primary,
-      border: `1px solid ${colors.border.base}`,
-      borderRadius: borderRadius.large,
-      boxShadow: shadows.medium,
+      height: '100%',
+      minHeight: '500px',
+      maxHeight: '700px',
+      background: whiteTheme.bg.primary,
+      border: `1px solid ${whiteTheme.border.base}`,
+      borderRadius: '12px',
+      boxShadow: whiteTheme.shadow.xl,
       overflow: 'hidden',
     },
 
     header: {
-      padding: spacing[4],
-      background: colors.bg.secondary,
-      borderBottom: `1px solid ${colors.border.base}`,
+      padding: '16px 20px',
+      background: whiteTheme.bg.primary,
+      borderBottom: `1px solid ${whiteTheme.border.light}`,
     },
 
     headerTitle: {
       fontSize: '16px',
       fontWeight: 600,
-      color: colors.text.primary,
+      color: whiteTheme.text.primary,
       margin: 0,
     },
 
     headerSubtitle: {
       fontSize: '12px',
-      color: colors.text.tertiary,
+      color: whiteTheme.text.tertiary,
       margin: 0,
-      marginTop: spacing[1],
+      marginTop: '4px',
     },
 
     messagesContainer: {
       flex: 1,
       overflowY: 'auto' as const,
-      padding: spacing[4],
+      padding: '20px',
       display: 'flex',
       flexDirection: 'column' as const,
-      gap: spacing[3],
+      gap: '16px',
+      background: whiteTheme.bg.secondary,
     },
 
-    message: {
+    messageWrapper: (isUser: boolean) => ({
       display: 'flex',
-      gap: spacing[3],
-      alignItems: 'flex-start',
-    },
+      justifyContent: isUser ? 'flex-end' : 'flex-start',
+    }),
 
-    messageContent: {
-      padding: spacing[3],
-      borderRadius: borderRadius.base,
-      maxWidth: '80%',
+    messageBubble: (isUser: boolean) => ({
+      maxWidth: '75%',
+      padding: '10px 14px',
+      borderRadius: '12px',
       fontSize: '14px',
       lineHeight: 1.5,
-    },
-
-    userMessage: {
-      background: colors.accent.blue,
-      color: '#FFFFFF',
-      marginLeft: 'auto',
-    },
-
-    assistantMessage: {
-      background: colors.bg.tertiary,
-      color: colors.text.primary,
-    },
+      background: isUser ? whiteTheme.accent.blue : whiteTheme.bg.primary,
+      color: isUser ? '#FFFFFF' : whiteTheme.text.primary,
+      border: isUser ? 'none' : `1px solid ${whiteTheme.border.light}`,
+      boxShadow: whiteTheme.shadow.small,
+    }),
 
     timestamp: {
       fontSize: '11px',
-      color: colors.text.tertiary,
-      marginTop: spacing[1],
+      color: whiteTheme.text.tertiary,
+      marginTop: '4px',
+      textAlign: 'right' as const,
     },
 
     inputContainer: {
-      padding: spacing[4],
-      background: colors.bg.primary,
-      borderTop: `1px solid ${colors.border.base}`,
+      padding: '16px 20px',
+      background: whiteTheme.bg.primary,
+      borderTop: `1px solid ${whiteTheme.border.light}`,
       display: 'flex',
-      gap: spacing[2],
+      gap: '12px',
+      alignItems: 'flex-end',
     },
 
     input: {
       flex: 1,
+      padding: '10px 12px',
+      border: `1px solid ${whiteTheme.border.base}`,
+      borderRadius: '8px',
+      fontSize: '14px',
+      color: whiteTheme.text.primary,
+      background: whiteTheme.bg.primary,
+      outline: 'none',
+      resize: 'none' as const,
+      fontFamily: 'Inter, sans-serif',
+      minHeight: '40px',
+      maxHeight: '120px',
+    },
+
+    sendButton: {
+      padding: '10px 20px',
+      background: whiteTheme.accent.blue,
+      color: '#FFFFFF',
+      border: 'none',
+      borderRadius: '8px',
+      fontSize: '14px',
+      fontWeight: 500,
+      cursor: 'pointer',
+      transition: 'all 0.2s ease',
+      minHeight: '40px',
+    },
+
+    loadingContainer: {
+      display: 'flex',
+      justifyContent: 'flex-start',
+    },
+
+    loadingBubble: {
+      maxWidth: '75%',
+      padding: '10px 14px',
+      borderRadius: '12px',
+      background: whiteTheme.bg.primary,
+      border: `1px solid ${whiteTheme.border.light}`,
+      boxShadow: whiteTheme.shadow.small,
     },
 
     loadingDots: {
       display: 'flex',
       gap: '4px',
-      padding: spacing[3],
     },
 
     dot: {
       width: '8px',
       height: '8px',
       borderRadius: '50%',
-      background: colors.text.tertiary,
+      background: whiteTheme.text.tertiary,
       animation: 'pulse 1.4s infinite ease-in-out',
     },
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <h3 style={styles.headerTitle}>ProShop 24/7</h3>
-        <p style={styles.headerSubtitle}>
-          {demoSlug ? 'Custom Demo' : 'Fox Hollow Golf Course'}
-        </p>
-      </div>
-
-      <div style={styles.messagesContainer}>
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            style={{
-              ...styles.message,
-              justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start',
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  ...styles.messageContent,
-                  ...(message.role === 'user' ? styles.userMessage : styles.assistantMessage),
-                }}
-              >
-                {message.content}
-              </div>
-              <div style={{ ...styles.timestamp, textAlign: message.role === 'user' ? 'right' : 'left' }}>
-                {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </div>
-            </div>
-          </div>
-        ))}
-
-        {isLoading && (
-          <div style={styles.loadingDots}>
-            <div style={styles.dot} />
-            <div style={{ ...styles.dot, animationDelay: '0.2s' }} />
-            <div style={{ ...styles.dot, animationDelay: '0.4s' }} />
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      <div style={styles.inputContainer}>
-        <Input
-          style={styles.input}
-          placeholder="Type your message..."
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyPress={handleKeyPress}
-          disabled={isLoading}
-        />
-        <Button onClick={handleSend} disabled={isLoading || !inputValue.trim()}>
-          Send
-        </Button>
-      </div>
-
+    <>
       <style>{`
         @keyframes pulse {
           0%, 60%, 100% {
@@ -272,8 +248,100 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({
             opacity: 1;
           }
         }
+
+        .chat-input:focus {
+          border-color: ${whiteTheme.accent.blue};
+          box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.1);
+        }
+
+        .send-button:hover:not(:disabled) {
+          background: ${whiteTheme.accent.blueHover};
+        }
+
+        .send-button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .messages-container::-webkit-scrollbar {
+          width: 6px;
+        }
+
+        .messages-container::-webkit-scrollbar-track {
+          background: ${whiteTheme.bg.secondary};
+        }
+
+        .messages-container::-webkit-scrollbar-thumb {
+          background: ${whiteTheme.border.medium};
+          border-radius: 3px;
+        }
+
+        .messages-container::-webkit-scrollbar-thumb:hover {
+          background: ${whiteTheme.border.dark};
+        }
       `}</style>
-    </div>
+
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <h3 style={styles.headerTitle}>ProShop 24/7</h3>
+          <p style={styles.headerSubtitle}>
+            {demoSlug ? `${demoSlug} demo` : 'AI Golf Assistant'}
+          </p>
+        </div>
+
+        <div className="messages-container" style={styles.messagesContainer}>
+          {messages.map((message, index) => (
+            <div key={index} style={styles.messageWrapper(message.role === 'user')}>
+              <div>
+                <div style={styles.messageBubble(message.role === 'user')}>
+                  {message.content}
+                </div>
+                {message.role === 'user' && (
+                  <div style={styles.timestamp}>
+                    {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {isLoading && (
+            <div style={styles.loadingContainer}>
+              <div style={styles.loadingBubble}>
+                <div style={styles.loadingDots}>
+                  <div style={styles.dot} />
+                  <div style={{ ...styles.dot, animationDelay: '0.2s' }} />
+                  <div style={{ ...styles.dot, animationDelay: '0.4s' }} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        <div style={styles.inputContainer}>
+          <textarea
+            className="chat-input"
+            style={styles.input}
+            placeholder="Type your message..."
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyPress={handleKeyPress}
+            disabled={isLoading}
+            rows={1}
+          />
+          <button
+            className="send-button"
+            style={styles.sendButton}
+            onClick={handleSend}
+            disabled={isLoading || !inputValue.trim()}
+          >
+            Send
+          </button>
+        </div>
+      </div>
+    </>
   );
 };
 

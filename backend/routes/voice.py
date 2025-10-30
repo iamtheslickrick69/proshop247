@@ -10,7 +10,14 @@ import asyncio
 import base64
 from datetime import datetime
 
-from services.voice import decode_audio_from_twilio, encode_audio_for_twilio
+from services.voice import (
+    decode_audio_from_twilio,
+    encode_audio_for_twilio,
+    initialize_deepgram_stream,
+    text_to_speech_for_twilio,
+    stream_audio_to_twilio_websocket,
+    mulaw_to_pcm
+)
 from services.agent import create_demo_agent, create_production_agent
 from services.memory import (
     identify_or_create_caller,
@@ -42,21 +49,20 @@ async def media_stream_handler(websocket: WebSocket):
     """
     Handle Twilio Media Stream WebSocket connection.
 
-    Flow:
-    1. Twilio calls phone number
-    2. TwiML directs to this WebSocket
-    3. Bidirectional audio streaming begins
-    4. Audio → Deepgram (STT) → Agent → ElevenLabs (TTS) → Audio
+    Complete voice pipeline:
+    1. Twilio → WebSocket (incoming audio)
+    2. Audio → Deepgram STT (transcription)
+    3. Transcription → Agent (response generation)
+    4. Response → ElevenLabs TTS (audio generation)
+    5. Audio → Twilio (outgoing to caller)
     """
     await websocket.accept()
     print("📞 WebSocket connection accepted")
 
     stream_sid = None
     call_sid = None
-
-    # For MVP, we'll track the conversation as text
-    conversation_transcript = []
-    audio_buffer = bytearray()
+    deepgram_ws = None
+    transcript_buffer = []
 
     try:
         async for message in websocket.iter_text():
@@ -64,7 +70,9 @@ async def media_stream_handler(websocket: WebSocket):
             event = data.get('event')
 
             if event == 'start':
-                # Call started
+                # ============================================================
+                # CALL START - Initialize everything
+                # ============================================================
                 stream_sid = data['streamSid']
                 call_sid = data['start']['callSid']
                 from_number = data['start'].get('customParameters', {}).get('From', 'unknown')
@@ -73,59 +81,154 @@ async def media_stream_handler(websocket: WebSocket):
                 print(f"   From: {from_number}")
                 print(f"   Stream: {stream_sid}")
 
+                # Initialize caller identity and memory
+                # For demo: Use Fox Hollow as default golf course
+                golf_course_id = "demo-fox-hollow"
+
+                try:
+                    # Identify or create caller
+                    caller = identify_or_create_caller(supabase, from_number, golf_course_id)
+
+                    # Get conversation history
+                    recent_conversations = get_recent_conversations(supabase, caller['id'], limit=3)
+                    history_context = build_context_string(recent_conversations)
+
+                    # Create agent with context
+                    # For demo, we'll use a simplified golf course dict
+                    demo_golf_course = {
+                        'name': 'Fox Hollow Golf Course',
+                        'location': 'Troy, Michigan',
+                        'phone_number': '+12272334997'
+                    }
+
+                    agent = create_demo_agent(demo_golf_course)
+
+                    print(f"✅ Agent initialized for caller {caller['id']}")
+
+                except Exception as e:
+                    print(f"⚠️ Error initializing caller/agent: {e}")
+                    # Create fallback agent
+                    demo_golf_course = {
+                        'name': 'Fox Hollow Golf Course',
+                        'location': 'Troy, Michigan'
+                    }
+                    agent = create_demo_agent(demo_golf_course)
+                    caller = {'id': 'demo-caller', 'phone_number': from_number}
+
                 # Initialize call session
                 active_calls[call_sid] = {
                     'stream_sid': stream_sid,
                     'from_number': from_number,
+                    'caller': caller,
+                    'golf_course_id': golf_course_id,
                     'start_time': datetime.now(),
                     'transcript': [],
-                    'agent': None,
-                    'audio_buffer': bytearray()
+                    'agent': agent,
+                    'transcript_buffer': [],
+                    'is_processing': False  # Prevent overlapping agent responses
                 }
 
+                # Define transcript callback for Deepgram
+                def on_transcript(transcript: str, is_final: bool):
+                    """Handle transcripts from Deepgram"""
+                    if is_final and transcript.strip():
+                        # Queue for agent processing
+                        active_calls[call_sid]['transcript_buffer'].append(transcript)
+
+                        # Process immediately
+                        asyncio.create_task(
+                            process_agent_response(websocket, stream_sid, call_sid, transcript)
+                        )
+
+                # Initialize Deepgram WebSocket
+                try:
+                    deepgram_ws = await initialize_deepgram_stream(call_sid, on_transcript)
+                    print(f"✅ Deepgram initialized for {call_sid}")
+                except Exception as e:
+                    print(f"❌ Failed to initialize Deepgram: {e}")
+                    # Continue without STT (will fail but connection stays open)
+
                 # Send welcome message
-                welcome_text = "Thank you for calling Fox Hollow Golf Course. How can I help you today?"
-                await send_tts_to_twilio(websocket, stream_sid, welcome_text)
+                try:
+                    welcome_text = "Thank you for calling Fox Hollow Golf Course. How can I help you today?"
+                    await send_agent_response(websocket, stream_sid, call_sid, welcome_text)
+                except Exception as e:
+                    print(f"⚠️ Error sending welcome message: {e}")
 
             elif event == 'media':
-                # Incoming audio from caller
+                # ============================================================
+                # INCOMING AUDIO - Forward to Deepgram
+                # ============================================================
                 if call_sid not in active_calls:
                     continue
 
-                payload = data['media']['payload']
+                if data['media'].get('track') == 'inbound':
+                    payload = data['media']['payload']
 
-                # Decode audio
-                # pcm_audio = decode_audio_from_twilio(payload)
+                    # Decode base64 μ-law audio from Twilio
+                    mulaw_data = base64.b64decode(payload)
 
-                # Buffer audio
-                active_calls[call_sid]['audio_buffer'].extend(base64.b64decode(payload))
+                    # Convert μ-law (8kHz) to PCM (16kHz) for Deepgram
+                    pcm_audio = mulaw_to_pcm(mulaw_data)
 
-                # For MVP: We'll use a simplified approach
-                # In production, this would stream to Deepgram continuously
-                # For now, we'll wait for silence detection or timeout
+                    # Send to Deepgram for transcription
+                    if deepgram_ws:
+                        try:
+                            await deepgram_ws.send(pcm_audio)
+                        except Exception as e:
+                            print(f"⚠️ Error sending audio to Deepgram: {e}")
 
             elif event == 'stop':
-                # Call ended
+                # ============================================================
+                # CALL END - Store conversation and cleanup
+                # ============================================================
                 print(f"📞 Call ended: {call_sid}")
 
                 if call_sid in active_calls:
-                    # Store conversation
                     session = active_calls[call_sid]
+
+                    # Build full transcript
                     transcript_text = "\n".join(session['transcript'])
 
-                    # In production mode, store to database
-                    # For demo mode, just log
-                    print(f"📝 Call transcript:\n{transcript_text}")
+                    # Calculate duration
+                    duration = int((datetime.now() - session['start_time']).total_seconds())
 
-                    # Cleanup
+                    # Store conversation in database
+                    try:
+                        store_conversation(
+                            supabase=supabase,
+                            caller_id=session['caller']['id'],
+                            golf_course_id=session['golf_course_id'],
+                            transcript=transcript_text,
+                            channel='voice',
+                            duration_seconds=duration
+                        )
+                        print(f"✅ Conversation stored for {call_sid}")
+                    except Exception as e:
+                        print(f"⚠️ Error storing conversation: {e}")
+                        print(f"📝 Call transcript:\n{transcript_text}")
+
+                    # Close Deepgram connection
+                    if deepgram_ws:
+                        try:
+                            await deepgram_ws.finish()
+                        except:
+                            pass
+
+                    # Cleanup session
                     del active_calls[call_sid]
 
             elif event == 'mark':
-                # Twilio confirmation marker (can ignore for MVP)
+                # Twilio confirmation marker (can ignore)
                 pass
 
     except WebSocketDisconnect:
         print(f"📞 WebSocket disconnected: {call_sid}")
+        if deepgram_ws:
+            try:
+                await deepgram_ws.finish()
+            except:
+                pass
         if call_sid and call_sid in active_calls:
             del active_calls[call_sid]
 
@@ -135,176 +238,132 @@ async def media_stream_handler(websocket: WebSocket):
         traceback.print_exc()
 
 
-async def send_tts_to_twilio(
+async def process_agent_response(
     websocket: WebSocket,
     stream_sid: str,
-    text: str
+    call_sid: str,
+    user_message: str
 ):
     """
-    Convert text to speech and send to Twilio.
+    Process user message through agent and send response.
 
     Args:
         websocket: Twilio WebSocket connection
-        stream_sid: Twilio stream identifier
+        stream_sid: Twilio stream ID
+        call_sid: Call session ID
+        user_message: Transcribed user message
+    """
+    if call_sid not in active_calls:
+        return
+
+    session = active_calls[call_sid]
+
+    # Prevent overlapping responses
+    if session.get('is_processing', False):
+        print(f"⚠️ Already processing a response, queuing: {user_message[:50]}")
+        return
+
+    session['is_processing'] = True
+
+    try:
+        print(f"👤 [{call_sid}] User: {user_message}")
+        session['transcript'].append(f"Customer: {user_message}")
+
+        # Get agent response
+        agent = session['agent']
+        agent_response = agent.run(user_message)
+
+        print(f"🤖 [{call_sid}] Agent: {agent_response}")
+        session['transcript'].append(f"Agent: {agent_response}")
+
+        # Send response to caller
+        await send_agent_response(websocket, stream_sid, call_sid, agent_response)
+
+    except Exception as e:
+        print(f"❌ Error processing agent response: {e}")
+        import traceback
+        traceback.print_exc()
+
+        # Send fallback response
+        try:
+            fallback = "I'm sorry, I didn't catch that. Could you please repeat?"
+            await send_agent_response(websocket, stream_sid, call_sid, fallback)
+        except:
+            pass
+
+    finally:
+        session['is_processing'] = False
+
+
+async def send_agent_response(
+    websocket: WebSocket,
+    stream_sid: str,
+    call_sid: str,
+    text: str
+):
+    """
+    Convert text to speech and send to caller.
+
+    Args:
+        websocket: Twilio WebSocket connection
+        stream_sid: Twilio stream ID
+        call_sid: Call session ID
         text: Text to speak
     """
     try:
-        print(f"🔊 Sending TTS: {text[:50]}...")
+        print(f"🔊 [{call_sid}] Sending TTS: {text[:50]}...")
 
-        # For MVP without ElevenLabs API key, send text as mark
-        # In production, this would:
-        # 1. Call ElevenLabs API
-        # 2. Get audio stream
-        # 3. Convert to μ-law
-        # 4. Send to Twilio
+        # Convert text to speech (returns μ-law audio for Twilio)
+        audio_mulaw = await text_to_speech_for_twilio(text)
 
-        # For now, use Twilio's <Say> verb via a mark event
-        # This allows testing without ElevenLabs
-        mark_message = {
-            "event": "mark",
-            "streamSid": stream_sid,
-            "mark": {
-                "name": f"tts_{datetime.now().timestamp()}"
-            }
-        }
+        # Stream audio to Twilio
+        await stream_audio_to_twilio_websocket(websocket, stream_sid, audio_mulaw)
 
-        await websocket.send_text(json.dumps(mark_message))
-
-        # Note: In production with ElevenLabs:
-        # audio_data = await get_elevenlabs_audio(text)
-        # encoded = encode_audio_for_twilio(audio_data)
-        # media_message = {
-        #     "event": "media",
-        #     "streamSid": stream_sid,
-        #     "media": {
-        #         "payload": encoded
-        #     }
-        # }
-        # await websocket.send_text(json.dumps(media_message))
+        print(f"✅ [{call_sid}] TTS sent successfully")
 
     except Exception as e:
         print(f"❌ Error sending TTS: {e}")
+        import traceback
+        traceback.print_exc()
 
 
-async def get_elevenlabs_audio(text: str) -> bytes:
-    """
-    Get audio from ElevenLabs TTS API.
-
-    Args:
-        text: Text to convert to speech
-
-    Returns:
-        PCM audio bytes
-    """
-    if not ELEVENLABS_API_KEY:
-        raise ValueError("ELEVENLABS_API_KEY not configured")
-
-    # ElevenLabs API integration
-    # This is a placeholder - full implementation would:
-    # 1. Make streaming request to ElevenLabs
-    # 2. Receive audio chunks
-    # 3. Return combined audio
-
-    import httpx
-
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}/stream"
-
-    headers = {
-        "Accept": "audio/mpeg",
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "text": text,
-        "model_id": "eleven_monolingual_v1",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75
-        }
-    }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, json=data, headers=headers, timeout=30.0)
-
-        if response.status_code == 200:
-            return response.content
-        else:
-            raise Exception(f"ElevenLabs API error: {response.status_code}")
-
-
-async def transcribe_with_deepgram(audio_data: bytes) -> str:
-    """
-    Transcribe audio using Deepgram.
-
-    Args:
-        audio_data: PCM audio bytes at 16kHz
-
-    Returns:
-        Transcribed text
-    """
-    if not DEEPGRAM_API_KEY:
-        raise ValueError("DEEPGRAM_API_KEY not configured")
-
-    # Deepgram API integration
-    # This is a placeholder - full implementation would:
-    # 1. Stream audio to Deepgram WebSocket
-    # 2. Receive real-time transcription
-    # 3. Return final transcript
-
-    import httpx
-
-    url = "https://api.deepgram.com/v1/listen"
-
-    headers = {
-        "Authorization": f"Token {DEEPGRAM_API_KEY}",
-        "Content-Type": "audio/raw"
-    }
-
-    params = {
-        "model": "nova-2",
-        "encoding": "linear16",
-        "sample_rate": "16000",
-        "channels": "1"
-    }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            headers=headers,
-            params=params,
-            content=audio_data,
-            timeout=30.0
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            transcript = result['results']['channels'][0]['alternatives'][0]['transcript']
-            return transcript
-        else:
-            raise Exception(f"Deepgram API error: {response.status_code}")
 
 
 # TwiML endpoint to start Media Stream
 @router.post("/voice/incoming")
-async def handle_incoming_call():
+async def handle_incoming_call(
+    request: Dict = None,
+    CallSid: str = "",
+    From: str = "",
+    To: str = ""
+):
     """
     TwiML endpoint for incoming calls.
     Returns TwiML to start Media Stream.
+
+    Note: Set base_url to your ngrok URL for local testing,
+    or your production URL when deployed.
     """
     from fastapi.responses import Response
+    import os
 
-    # Get base URL (in production, use actual domain)
-    # For local testing with ngrok: use ngrok URL
-    base_url = "wss://your-app.railway.app"  # Update in production
+    # Get base URL from environment or use default
+    # For ngrok: export BASE_URL="wss://abc123.ngrok.io"
+    # For Railway: export BASE_URL="wss://your-app.up.railway.app"
+    base_url = os.getenv("BASE_URL", "wss://localhost:8000")
 
+    # Log incoming call
+    print(f"📞 Incoming call from {From} to {To} (CallSid: {CallSid})")
+
+    # Build TwiML with Media Stream
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Start>
-        <Stream url="{base_url}/v1/media-stream" />
-    </Start>
-    <Say>Please wait while we connect you.</Say>
-    <Pause length="30"/>
+    <Connect>
+        <Stream url="{base_url}/v1/media-stream">
+            <Parameter name="From" value="{From}" />
+            <Parameter name="To" value="{To}" />
+        </Stream>
+    </Connect>
 </Response>"""
 
     return Response(content=twiml, media_type="application/xml")
